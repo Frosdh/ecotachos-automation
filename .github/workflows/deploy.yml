@@ -1,38 +1,195 @@
-name: 🚀 Deploy Ecotachos Automation
+name: Deploy Backend and Frontend to Droplet
 
 on:
   push:
     branches:
       - main
+      - master
+  workflow_dispatch:
 
 jobs:
-  deploy:
+  backend:
+    name: Deploy Backend to Droplet
     runs-on: ubuntu-latest
-
     steps:
-      - name: 📥 Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 🟢 Setup Go
-        uses: actions/setup-go@v5
+      - name: Deploy to Droplet
+        uses: appleboy/ssh-action@v1.0.0
         with:
-          go-version: '1.22'
+          host: ${{ secrets.DROPLET_IP }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: 22
+          script: |
+            # Navigate to backend directory
+            cd /var/www/ecotachostec-backend
+            
+            # Create backup of current deployment
+            if [ -d "/var/www/ecotachostec-backend" ]; then
+              sudo cp -r /var/www/ecotachostec-backend /var/www/ecotachostec-backend.backup.$(date +%Y%m%d_%H%M%S)
+            fi
+            
+            # Pull latest changes
+            git fetch origin
+            git reset --hard origin/main || git reset --hard origin/master
+            
+            echo "✅ Code updated successfully!"
 
-      - name: 🔧 Build Go deploy script
-        run: |
-          go mod tidy
-          go build -o deploy
-
-      - name: 🔐 Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.DROPLET_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H ${{ secrets.DROPLET_IP }} >> ~/.ssh/known_hosts
-
-      - name: 🚀 Execute deployment on Droplet
-        run: |
-          ssh ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_IP }} << 'EOF'
+      - name: Rebuild and Restart Docker Containers
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: 22
+          script: |
             cd /var/www/ecotachostec-backend/docker
-            ./deploy || true
-          EOF
+            
+            # Stop current containers
+            sudo docker-compose down
+            
+            # Rebuild images
+            sudo docker-compose build --no-cache
+            
+            # Start containers
+            sudo docker-compose up -d
+            
+            # Wait for containers to be healthy
+            echo "⏳ Waiting for containers to start..."
+            sleep 10
+            
+            # Show container status
+            sudo docker-compose ps
+            
+            echo "✅ Backend containers restarted successfully!"
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: 22
+          script: |
+            # Wait a bit more for services to be fully ready
+            sleep 5
+            
+            # Check if containers are running
+            cd /var/www/ecotachostec-backend/docker
+            sudo docker-compose ps
+            
+            # Test the API health endpoint
+            echo "🔍 Testing API endpoints..."
+            curl -f http://localhost:8000/api/ia/health/ || echo "⚠️ Warning: Health check failed"
+            
+            # Check nginx is serving the API
+            curl -f http://localhost/api/ia/health/ || echo "⚠️ Warning: Nginx proxy check failed"
+            
+            # Show recent logs
+            echo "📋 Recent container logs:"
+            sudo docker-compose logs --tail=20
+            
+            echo "🚀 Deployment completed at $(date)"
+
+      - name: Cleanup old backups
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: 22
+          script: |
+            # Keep only the 3 most recent backups
+            cd /var/www
+            ls -t ecotachostec-backend.backup.* 2>/dev/null | tail -n +4 | xargs -r sudo rm -rf
+            echo "🧹 Old backups cleaned up"
+
+  frontend:
+    name: Deploy Frontend to Droplet
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Prepare server directory and backup
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: 22
+          script: |
+            # Create backup of current deployment
+            if [ -d "/var/www/ecotachostec-frontend" ]; then
+              sudo cp -r /var/www/ecotachostec-frontend /var/www/ecotachostec-frontend.backup.$(date +%Y%m%d_%H%M%S)
+            fi
+            
+            # Create directory if it doesn't exist
+            sudo mkdir -p /var/www/ecotachostec-frontend
+            
+            # Set proper permissions
+            sudo chown -R $USER:$USER /var/www/ecotachostec-frontend
+
+      - name: Copy build files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: 22
+          source: "dist/*"
+          target: "/var/www/ecotachostec-frontend"
+          strip_components: 1
+          overwrite: true
+
+      - name: Restart Nginx
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: 22
+          script: |
+            # Set proper permissions
+            sudo chown -R www-data:www-data /var/www/ecotachostec-frontend
+            sudo chmod -R 755 /var/www/ecotachostec-frontend
+            
+            # Test nginx configuration
+            sudo nginx -t
+            
+            # Reload nginx
+            sudo systemctl reload nginx
+            
+            echo "✅ Frontend deployed successfully!"
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.DROPLET_IP }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: 22
+          script: |
+            # Check if nginx is running
+            sudo systemctl status nginx --no-pager
+            
+            # Test the endpoint
+            curl -I http://localhost/ || echo "⚠️ Warning: Could not verify frontend"
+            
+            echo "🚀 Deployment completed at $(date)"
