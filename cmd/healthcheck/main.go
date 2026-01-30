@@ -1,10 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
-	"encoding/json"
 	"path/filepath"
 	"time"
 )
@@ -45,16 +45,16 @@ func getenv(key, def string) string {
 }
 
 type HealthLog struct {
-    Status    string `json:"status"`
-    Code      int    `json:"code"`
-    Timestamp string `json:"timestamp"`
+	Status    string `json:"status"`
+	Code      int    `json:"code"`
+	Timestamp string `json:"timestamp"`
 }
 
 func writeJSON(status string, code int) {
-    dir := getenv("HEALTH_LOG_DIR", "logs")
-    _ = os.MkdirAll(dir, 0o755)
-    f := filepath.Join(dir, "health.json")
-    h := HealthLog{Status: status, Code: code, Timestamp: time.Now().UTC().Format(time.RFC3339)}
-    b, _ := json.MarshalIndent(h, "", "  ")
-    _ = os.WriteFile(f, b, 0o644)
+	dir := getenv("HEALTH_LOG_DIR", "logs")
+	_ = os.MkdirAll(dir, 0o755)
+	f := filepath.Join(dir, "health.json")
+	h := HealthLog{Status: status, Code: code, Timestamp: time.Now().UTC().Format(time.RFC3339)}
+	b, _ := json.MarshalIndent(h, "", "  ")
+	_ = os.WriteFile(f, b, 0o644)
 }

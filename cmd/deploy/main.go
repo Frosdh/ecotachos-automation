@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"time"
-	"io/ioutil"
+
 	"golang.org/x/crypto/ssh"
 )
 
@@ -62,10 +63,10 @@ func deployRemote(host, user, port, keyPath string) error {
 		return fmt.Errorf("parseando llave: %w", err)
 	}
 	cfg := &ssh.ClientConfig{
-		User: user,
-		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		User:            user,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout: 10 * time.Second,
+		Timeout:         10 * time.Second,
 	}
 	addr := host + ":" + port
 	c, err := ssh.Dial("tcp", addr, cfg)
